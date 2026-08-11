@@ -1,0 +1,14 @@
+{
+  "name": "oauth-relay",
+  "version": "1.0.0",
+  "description": "oauth.hostaka.fun — وسيط تحقق مركزي بين hostaka.fun والنطاقات الفرعية",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cookie-parser": "^1.4.6",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
