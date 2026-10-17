@@ -33,26 +33,70 @@ try { jwt = require('jsonwebtoken'); } catch (e) { /* اختياري — شوف 
 const app = express();
 
 const COOKIE_NAME = 'hostaka_relay';
-// نفس القيمة الافتراضية بالمشروع الرئيسي (server.js) — يُفضَّل ضبط نفس
-// القيمة الحقيقية بمتغير البيئة JWT_SECRET بكلا المشروعين بالإنتاج.
-const JWT_SECRET = process.env.JWT_SECRET || 'hostaka-secret-2026';
 // نطاقات مسموح لها تسأل عن التوكن (CORS + قبول الكوكي عبر النطاقات الفرعية)
 const ALLOWED_ORIGIN_RE = /^https:\/\/([a-z0-9-]+\.)?hostaka\.fun$/i;
 const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || '.hostaka.fun';
 const COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 يوم
 
+// ============================================================
+// التحقق من توقيع التوكن اختياري (معطّل افتراضياً) — فعّله بضبط
+// VERIFY_TOKENS=1 + نفس قيمة JWT_SECRET الحقيقية المستخدمة بمشروع
+// hostaka-main بالضبط. تفعيله بالغلط بقيمة سر مختلفة عن المشروع
+// الرئيسي يكسر الوسيط بالكامل بصمت (كل توكن حقيقي يُرفض كـ"غير صالح")،
+// فالافتراضي تخزين آمن بسيط بدون تحقق توقيع، والتحقق الملزم الحقيقي
+// يبقى دائماً على hostaka.fun نفسه (كل طلب API يمر بـ requireAuth هناك).
+//
+// ملاحظة أمنية: ما فيه أي سر افتراضي مكتوب بالكود إطلاقاً. لو VERIFY_TOKENS
+// مفعّل لازم JWT_SECRET يكون مضبوط بمتغير البيئة، وإلا السيرفر يرفض الإقلاع
+// (بدل ما يستخدم سر معروف من المستودع العام — وهذا كان ثغرة حرجة).
+// ============================================================
+const VERIFY_TOKENS = process.env.VERIFY_TOKENS === '1';
+const JWT_SECRET = process.env.JWT_SECRET || '';
+if (VERIFY_TOKENS && (!jwt || !JWT_SECRET)) {
+  throw new Error(
+    'VERIFY_TOKENS=1 يتطلب: (1) تثبيت حزمة jsonwebtoken، (2) ضبط JWT_SECRET بنفس قيمة مشروع hostaka-main بالضبط.'
+  );
+}
+if (!VERIFY_TOKENS) {
+  console.warn('⚠️  VERIFY_TOKENS غير مفعّل — التوكنات تُخزَّن بدون التحقق من توقيعها (التحقق الملزم على hostaka.fun).');
+}
+
+function looksLikeValidToken(token) {
+  if (typeof token !== 'string' || token.length < 10 || token.length > 4096) return false;
+  if (!VERIFY_TOKENS || !jwt) return true;
+  try { jwt.verify(token, JWT_SECRET); return true; }
+  catch (e) { return false; }
+}
+
+function isAllowedOrigin(origin) {
+  return typeof origin === 'string' && ALLOWED_ORIGIN_RE.test(origin);
+}
+
 app.disable('x-powered-by');
-app.set('trust proxy', true);
+app.set('trust proxy', 1);
 app.use(cookieParser());
 app.use(express.json({ limit: '64kb' }));
 
 // ============================================================
+// رؤوس أمان أساسية على كل الردود.
+// ============================================================
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  next();
+});
+
+// ============================================================
 // CORS يدوي — لازم نعكس الـ Origin بالضبط (مو *) عشان نقدر نستخدم
-// Access-Control-Allow-Credentials مع الكوكي
+// Access-Control-Allow-Credentials مع الكوكي. أي نطاق غير مسموح ما يحصل
+// على أي هيدر CORS، فالمتصفح يمنع قراءة الرد.
 // ============================================================
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (origin && ALLOWED_ORIGIN_RE.test(origin)) {
+  if (isAllowedOrigin(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
@@ -63,19 +107,51 @@ app.use((req, res, next) => {
   next();
 });
 
-// التحقق من توقيع التوكن اختياري (معطّل افتراضياً) — فعّله بضبط
-// VERIFY_TOKENS=1 + نفس قيمة JWT_SECRET الحقيقية المستخدمة بمشروع
-// hostaka-main بالضبط. تفعيله بالغلط بقيمة سر مختلفة عن المشروع
-// الرئيسي يكسر الوسيط بالكامل بصمت (كل توكن حقيقي يُرفض كـ"غير صالح")،
-// فالافتراضي تخزين آمن بسيط بدون تحقق توقيع، والتحقق الملزم الحقيقي
-// يبقى دائماً على hostaka.fun نفسه (كل طلب API يمر بـ requireAuth هناك).
-const VERIFY_TOKENS = process.env.VERIFY_TOKENS === '1';
-function looksLikeValidToken(token) {
-  if (typeof token !== 'string' || token.length < 10 || token.length > 4096) return false;
-  if (!VERIFY_TOKENS || !jwt) return true;
-  try { jwt.verify(token, JWT_SECRET); return true; }
-  catch (e) { return false; }
-}
+// ============================================================
+// حماية CSRF: العمليات التي تغيّر الحالة (POST/DELETE) لازم تجي من نطاق
+// مسموح عبر هيدر Origin صريح. المتصفح يرسل Origin تلقائياً على الطلبات
+// عبر-النطاقات، فنطلب تطابقه مع القائمة المسموحة. هذا يمنع محاولات
+// النماذج/الطلبات من مواقع خارجية (التي إما ترسل Origin غير مسموح أو لا
+// ترسله إطلاقاً).
+// ============================================================
+app.use((req, res, next) => {
+  if (req.method === 'POST' || req.method === 'DELETE') {
+    if (!isAllowedOrigin(req.headers.origin)) {
+      return res.status(403).json({ error: 'مصدر الطلب غير مسموح' });
+    }
+  }
+  next();
+});
+
+// ============================================================
+// حدّ معدّل بسيط داخل العملية (in-memory) على مسار التوكن — يقلّل
+// المحاولات الآلية/الاجتياح بدون أي اعتماد خارجي.
+// ============================================================
+const RATE_WINDOW_MS = 60 * 1000;
+const RATE_MAX = 60;
+const rateBuckets = new Map();
+app.use('/api/token', (req, res, next) => {
+  const key = req.ip || 'unknown';
+  const now = Date.now();
+  let bucket = rateBuckets.get(key);
+  if (!bucket || now - bucket.start > RATE_WINDOW_MS) {
+    bucket = { start: now, count: 0 };
+    rateBuckets.set(key, bucket);
+  }
+  bucket.count += 1;
+  if (bucket.count > RATE_MAX) {
+    return res.status(429).json({ error: 'طلبات كثيرة، حاول لاحقاً' });
+  }
+  if (rateBuckets.size > 5000) rateBuckets.clear();
+  next();
+});
+
+// لا يُخزَّن أي رد لمسار التوكن في أي كاش وسيط
+app.use('/api/token', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  next();
+});
 
 // ============================================================
 // GET /api/token — يقرأ الكوكي المشترك ويرجّع التوكن (لو موجود)
