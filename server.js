@@ -39,32 +39,31 @@ const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || '.hostaka.fun';
 const COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 يوم
 
 // ============================================================
-// التحقق من توقيع التوكن اختياري (معطّل افتراضياً) — فعّله بضبط
-// VERIFY_TOKENS=1 + نفس قيمة JWT_SECRET الحقيقية المستخدمة بمشروع
-// hostaka-main بالضبط. تفعيله بالغلط بقيمة سر مختلفة عن المشروع
-// الرئيسي يكسر الوسيط بالكامل بصمت (كل توكن حقيقي يُرفض كـ"غير صالح")،
-// فالافتراضي تخزين آمن بسيط بدون تحقق توقيع، والتحقق الملزم الحقيقي
-// يبقى دائماً على hostaka.fun نفسه (كل طلب API يمر بـ requireAuth هناك).
-//
-// ملاحظة أمنية: ما فيه أي سر افتراضي مكتوب بالكود إطلاقاً. لو VERIFY_TOKENS
-// مفعّل لازم JWT_SECRET يكون مضبوط بمتغير البيئة، وإلا السيرفر يرفض الإقلاع
-// (بدل ما يستخدم سر معروف من المستودع العام — وهذا كان ثغرة حرجة).
+// التحقق من توقيع التوكن مفعّل افتراضياً (VERIFY_TOKENS !== '0').
+// يتطلب حزمة jsonwebtoken + JWT_SECRET بنفس قيمة مشروع hostaka-main بالضبط؛
+// وإلا نرفض الإقلاع بدل القبول غير الآمن (لا يوجد أي سر افتراضي بالكود).
+// لتخزين بدون تحقق اضبط VERIFY_TOKENS=0 صراحةً (غير آمن — لا يُنصح به).
 // ============================================================
-const VERIFY_TOKENS = process.env.VERIFY_TOKENS === '1';
+const VERIFY_TOKENS = process.env.VERIFY_TOKENS !== '0';
 const JWT_SECRET = process.env.JWT_SECRET || '';
-if (VERIFY_TOKENS && (!jwt || !JWT_SECRET)) {
+if (VERIFY_TOKENS && (!jwt || !JWT_SECRET || JWT_SECRET.length < 16)) {
   throw new Error(
-    'VERIFY_TOKENS=1 يتطلب: (1) تثبيت حزمة jsonwebtoken، (2) ضبط JWT_SECRET بنفس قيمة مشروع hostaka-main بالضبط.'
+    'VERIFY_TOKENS مفعّل (افتراضياً) ويتطلب: (1) حزمة jsonwebtoken، ' +
+    '(2) ضبط JWT_SECRET (16 حرفاً على الأقل) بنفس قيمة مشروع hostaka-main بالضبط. ' +
+    'لتعطيل التحقق مؤقتاً (غير آمن) اضبط VERIFY_TOKENS=0.'
   );
 }
 if (!VERIFY_TOKENS) {
-  console.warn('⚠️  VERIFY_TOKENS غير مفعّل — التوكنات تُخزَّن بدون التحقق من توقيعها (التحقق الملزم على hostaka.fun).');
+  console.warn('⚠️  VERIFY_TOKENS=0 — التوكنات تُخزَّن بدون التحقق من توقيعها (غير آمن).');
 }
 
 function looksLikeValidToken(token) {
   if (typeof token !== 'string' || token.length < 10 || token.length > 4096) return false;
-  if (!VERIFY_TOKENS || !jwt) return true;
-  try { jwt.verify(token, JWT_SECRET); return true; }
+  if (!VERIFY_TOKENS) {
+    // حتى بلا تحقق توقيع: نرفض أي شيء ليس بهيئة JWT (3 مقاطع base64url).
+    return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token);
+  }
+  try { jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }); return true; }
   catch (e) { return false; }
 }
 
